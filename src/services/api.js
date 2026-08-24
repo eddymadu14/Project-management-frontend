@@ -4,7 +4,7 @@ import axios from "axios";
 
 // Create a reusable Axios instance
 const api = axios.create({
-  baseURL: "http://localhost:5000/api/", // your backend base URL
+  baseURL: `{import.meta.env.VITE_API_URL}`/api, // your backend base URL
   headers: {
     "Content-Type": "application/json",
   },
