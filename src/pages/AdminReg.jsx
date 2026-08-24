@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { pageVariants, pageTransition } from "../motion/pageVariants";
-import AuthForm from "../components/AuthForm";
+import AuthForm from "../components/Authform";
 import api from "../services/api";
 
 export default function RegisterAdmin() {
