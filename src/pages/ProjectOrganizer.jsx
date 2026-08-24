@@ -1,91 +1,163 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import {
   DragDropContext,
   Droppable,
   Draggable,
 } from "@hello-pangea/dnd";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import {
-  AlertTriangle,
-  ArrowLeft,
-  CalendarDays,
-  Check,
-  CheckCircle2,
-  CircleDot,
-  Clock3,
-  Edit3,
-  Filter,
-  Loader2,
-  MoreHorizontal,
   Plus,
-  Search,
-  Target,
+  CheckCircle2,
   Trash2,
-  Users,
+  Edit2,
+  Clock3,
+  CircleDot,
+  Check,
   X,
+  RefreshCw,
 } from "lucide-react";
 
-import api from "../utils/api";
 import { useTheme } from "../context/ThemeContext";
+import api from "../services/api";
+
 import RiskBadge from "../components/RiskBadge";
 import TimelineModal from "../components/modals/TimelineModal";
 import WorkloadRadar from "../components/charts/WorkloadRadar";
 
+
+/* =========================================================
+   STATUS CONFIG
+========================================================= */
+
+const STATUS_CONFIG = {
+  todo: {
+    label: "To Do",
+    color: "text-slate-400",
+    dot: "bg-slate-400",
+  },
+
+  "in-progress": {
+    label: "In Progress",
+    color: "text-blue-400",
+    dot: "bg-blue-400",
+  },
+
+  completed: {
+    label: "Completed",
+    color: "text-emerald-400",
+    dot: "bg-emerald-400",
+  },
+};
+
+
 const EMPTY_COLUMNS = {
   todo: [],
   "in-progress": [],
-  done: [],
+  completed: [],
 };
 
-const STATUS_META = {
-  todo: {
-    label: "To Do",
-    icon: CircleDot,
-    color: "text-orbit-info",
-    bg: "bg-orbit-info/10",
-    border: "border-orbit-info/20",
-  },
-  "in-progress": {
-    label: "In Progress",
-    icon: Clock3,
-    color: "text-orbit-violet",
-    bg: "bg-orbit-violet/10",
-    border: "border-orbit-violet/20",
-  },
-  done: {
-    label: "Completed",
-    icon: CheckCircle2,
-    color: "text-orbit-success",
-    bg: "bg-orbit-success/10",
-    border: "border-orbit-success/20",
-  },
+
+/* =========================================================
+   STATUS NORMALIZATION
+========================================================= */
+
+const normalizeStatus = (status, isCompleted = false) => {
+  if (isCompleted) {
+    return "completed";
+  }
+
+  const value = String(status || "")
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, "-")
+    .replace(/\s+/g, "-");
+
+  switch (value) {
+    case "todo":
+    case "to-do":
+    case "pending":
+    case "backlog":
+    case "not-started":
+    case "notstarted":
+      return "todo";
+
+    case "in-progress":
+    case "inprogress":
+    case "progress":
+    case "working":
+      return "in-progress";
+
+    case "done":
+    case "complete":
+    case "completed":
+    case "finished":
+      return "completed";
+
+    default:
+      return "todo";
+  }
 };
 
-const EMPTY_FORM = {
-  title: "",
-  description: "",
-  assignedTo: "",
-  estimatedHours: 1,
-  riskScore: 0,
-  dependencies: [],
-  project: "",
+
+/* =========================================================
+   TASK NORMALIZATION
+========================================================= */
+
+const normalizeTask = (task) => ({
+  ...task,
+
+  _id: task._id || task.id,
+
+  status: normalizeStatus(
+    task.status,
+    task.isCompleted
+  ),
+
+  isCompleted:
+    task.isCompleted ||
+    ["done", "complete", "completed", "finished"].includes(
+      String(task.status || "").toLowerCase()
+    ),
+});
+
+
+/* =========================================================
+   GROUP TASKS
+========================================================= */
+
+const groupTasks = (tasks = []) => {
+  const grouped = {
+    todo: [],
+    "in-progress": [],
+    completed: [],
+  };
+
+  tasks.forEach((rawTask) => {
+    const task = normalizeTask(rawTask);
+
+    if (!task._id) return;
+
+    grouped[task.status].push(task);
+  });
+
+  return grouped;
 };
 
-const normalizeStatus = (status) => {
-  if (status === "completed") return "done";
-  if (status === "in_progress") return "in-progress";
-  if (status === "in progress") return "in-progress";
-  return STATUS_META[status] ? status : "todo";
-};
+
+/* =========================================================
+   COMPONENT
+========================================================= */
 
 const ProjectOrganizer = () => {
   const { projectId: routeProjectId } = useParams();
-  const navigate = useNavigate();
   const { theme } = useTheme();
+
+  const isDark = theme === "dark";
 
   const [projects, setProjects] = useState([]);
   const [projectId, setProjectId] = useState(routeProjectId || "");
+
   const [columns, setColumns] = useState(EMPTY_COLUMNS);
 
   const [loadingProjects, setLoadingProjects] = useState(true);
@@ -94,158 +166,205 @@ const ProjectOrganizer = () => {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
 
-  const [formData, setFormData] = useState(EMPTY_FORM);
-
   const [toast, setToast] = useState(null);
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
 
   const [showTimeline, setShowTimeline] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
 
-  const selectedProject = useMemo(
-    () => projects.find((project) => project._id === projectId),
-    [projects, projectId]
-  );
+  const [formData, setFormData] = useState({
+    title: "",
+    description: "",
+    assignedTo: "",
+    estimatedHours: 1,
+    riskScore: 0,
+    dependencies: [],
+    project: "",
+    status: "todo",
+  });
 
-  const allTasks = useMemo(
-    () => Object.values(columns).flat(),
-    [columns]
-  );
 
-  const stats = useMemo(() => {
-    const completed = columns.done.length;
-    const active = columns["in-progress"].length;
-    const todo = columns.todo.length;
-    const total = completed + active + todo;
-
-    const hours = allTasks.reduce(
-      (sum, task) => sum + Number(task.estimatedHours || 0),
-      0
-    );
-
-    return {
-      total,
-      completed,
-      active,
-      todo,
-      hours,
-      completion: total ? Math.round((completed / total) * 100) : 0,
-    };
-  }, [columns, allTasks]);
+  /* =======================================================
+     TOAST
+  ======================================================= */
 
   const showToast = useCallback((message, type = "success") => {
-    setToast({ message, type });
+    setToast({
+      message,
+      type,
+    });
 
-    window.setTimeout(() => {
+    setTimeout(() => {
       setToast(null);
-    }, 3200);
+    }, 3000);
   }, []);
 
+
+  /* =======================================================
+     FETCH PROJECTS
+  ======================================================= */
+
   const fetchProjects = useCallback(async () => {
+    setLoadingProjects(true);
+
     try {
-      setLoadingProjects(true);
+      const response = await api.get("/projects");
 
-      const { data } = await api.get("/projects");
-      const nextProjects = Array.isArray(data) ? data : [];
+      const data = Array.isArray(response.data)
+        ? response.data
+        : response.data?.projects || [];
 
-      setProjects(nextProjects);
+      setProjects(data);
 
-      const preferredProject =
-        routeProjectId &&
-        nextProjects.some((project) => project._id === routeProjectId)
-          ? routeProjectId
-          : nextProjects[0]?._id || "";
+      /*
+       * Preserve route-selected project.
+       * Only fallback to first project if route has no project ID.
+       */
+      if (routeProjectId) {
+        const exists = data.some(
+          (project) => project._id === routeProjectId
+        );
 
-      setProjectId(preferredProject);
+        if (exists) {
+          setProjectId(routeProjectId);
+        } else if (data.length > 0) {
+          setProjectId(data[0]._id);
+        }
+      } else if (!projectId && data.length > 0) {
+        setProjectId(data[0]._id);
+      }
     } catch (error) {
-      console.error("Error fetching projects:", error);
-      showToast("Unable to load your projects.", "error");
+      console.error(
+        "ProjectOrganizer: failed to fetch projects",
+        error
+      );
+
+      showToast("Unable to load projects", "error");
     } finally {
       setLoadingProjects(false);
     }
-  }, [routeProjectId, showToast]);
+  }, [routeProjectId, projectId, showToast]);
+
+
+  /* =======================================================
+     FETCH TASKS
+  ======================================================= */
 
   const fetchTasks = useCallback(
-    async (selectedId) => {
-      if (!selectedId) {
+    async (selectedProjectId = projectId) => {
+      if (!selectedProjectId) {
         setColumns(EMPTY_COLUMNS);
         return;
       }
 
-      try {
-        setLoadingTasks(true);
+      setLoadingTasks(true);
 
-        const { data } = await api.get(
-          `/tasks/project/${selectedId}`
+      try {
+        const response = await api.get(
+          `/tasks/project/${selectedProjectId}`
         );
 
-        const grouped = {
-          todo: [],
-          "in-progress": [],
-          done: [],
-        };
+        /*
+         * Support both:
+         *
+         * [task, task, task]
+         *
+         * and:
+         *
+         * { tasks: [...] }
+         */
 
-        (Array.isArray(data) ? data : []).forEach((task) => {
-          const status = normalizeStatus(task.status);
+        const data = Array.isArray(response.data)
+          ? response.data
+          : response.data?.tasks || [];
 
-          grouped[status].push({
-            ...task,
-            status,
-          });
-        });
+        console.log(
+          "[ProjectOrganizer] Tasks returned:",
+          data
+        );
+
+        const grouped = groupTasks(data);
+
+        console.log(
+          "[ProjectOrganizer] Grouped tasks:",
+          grouped
+        );
 
         setColumns(grouped);
       } catch (error) {
-        console.error("Failed to fetch tasks:", error);
-        showToast("Unable to load project tasks.", "error");
+        console.error(
+          "ProjectOrganizer: failed to fetch tasks",
+          error
+        );
+
+        setColumns(EMPTY_COLUMNS);
+
+        showToast(
+          error.response?.status === 401
+            ? "Your session has expired. Please log in again."
+            : "Unable to load tasks",
+          "error"
+        );
       } finally {
         setLoadingTasks(false);
       }
     },
-    [showToast]
+    [projectId, showToast]
   );
+
+
+  /* =======================================================
+     INITIAL LOAD
+  ======================================================= */
 
   useEffect(() => {
     fetchProjects();
   }, [fetchProjects]);
 
+
+  /* =======================================================
+     LOAD TASKS WHEN PROJECT CHANGES
+  ======================================================= */
+
   useEffect(() => {
-    fetchTasks(projectId);
+    if (projectId) {
+      fetchTasks(projectId);
+    }
   }, [projectId, fetchTasks]);
 
-  const filteredTasks = useCallback(
-    (tasks) =>
-      tasks.filter((task) => {
-        const query = search.trim().toLowerCase();
 
-        const matchesSearch =
-          !query ||
-          task.title?.toLowerCase().includes(query) ||
-          task.description?.toLowerCase().includes(query) ||
-          task.assignedTo?.toLowerCase().includes(query);
-
-        const matchesStatus =
-          statusFilter === "all" ||
-          normalizeStatus(task.status) === statusFilter;
-
-        return matchesSearch && matchesStatus;
-      }),
-    [search, statusFilter]
-  );
+  /* =======================================================
+     RESET FORM
+  ======================================================= */
 
   const resetForm = () => {
     setFormData({
-      ...EMPTY_FORM,
+      title: "",
+      description: "",
+      assignedTo: "",
+      estimatedHours: 1,
+      riskScore: 0,
+      dependencies: [],
       project: projectId || "",
+      status: "todo",
     });
+
     setEditing(null);
   };
+
+
+  /* =======================================================
+     OPEN CREATE MODAL
+  ======================================================= */
 
   const openCreateModal = () => {
     resetForm();
     setShowModal(true);
   };
+
+
+  /* =======================================================
+     OPEN EDIT MODAL
+  ======================================================= */
 
   const openEditModal = (task) => {
     setEditing(task);
@@ -257,89 +376,142 @@ const ProjectOrganizer = () => {
       estimatedHours: task.estimatedHours || 1,
       riskScore: task.riskScore || 0,
       dependencies: task.dependencies || [],
-      project: task.project?._id || task.project || projectId,
+      project:
+        typeof task.project === "object"
+          ? task.project?._id
+          : task.project || projectId,
+      status: normalizeStatus(
+        task.status,
+        task.isCompleted
+      ),
     });
 
     setShowModal(true);
   };
 
-  const closeModal = () => {
-    setShowModal(false);
-    resetForm();
-  };
+
+  /* =======================================================
+     CREATE / UPDATE TASK
+  ======================================================= */
 
   const handleSubmit = async (event) => {
     event.preventDefault();
 
-    const payload = {
-      ...formData,
-      project: formData.project || projectId,
-      estimatedHours: Number(formData.estimatedHours) || 1,
-      riskScore: Number(formData.riskScore) || 0,
-    };
+    const targetProject =
+      formData.project || projectId;
 
-    if (!payload.project) {
-      showToast("Select a project first.", "error");
+    if (!targetProject) {
+      showToast("Please select a project", "error");
       return;
     }
 
+    const payload = {
+      ...formData,
+      project: targetProject,
+      status: normalizeStatus(formData.status),
+      isCompleted:
+        normalizeStatus(formData.status) === "completed",
+    };
+
     try {
       if (editing) {
-        await api.put(`/tasks/${editing._id}`, payload);
-        showToast("Task updated.");
+        await api.put(
+          `/tasks/${editing._id}`,
+          payload
+        );
+
+        showToast("Task updated successfully");
       } else {
         await api.post("/tasks", payload);
-        showToast("Task created.");
+
+        showToast("Task created successfully");
       }
 
-      closeModal();
-      await fetchTasks(payload.project);
+      setShowModal(false);
+      resetForm();
+
+      await fetchTasks(targetProject);
     } catch (error) {
-      console.error("Error saving task:", error);
+      console.error(
+        "ProjectOrganizer: failed to save task",
+        error
+      );
+
       showToast(
-        error.response?.data?.message || "Unable to save task.",
+        error.response?.data?.message ||
+          "Failed to save task",
         "error"
       );
     }
   };
 
+
+  /* =======================================================
+     DELETE TASK
+  ======================================================= */
+
   const deleteTask = async (task) => {
     const confirmed = window.confirm(
-      `Delete "${task.title}"? This cannot be undone.`
+      `Delete "${task.title}"?`
     );
 
     if (!confirmed) return;
 
     try {
       await api.delete(`/tasks/${task._id}`);
-      showToast("Task deleted.");
+
+      showToast("Task deleted");
+
       await fetchTasks(projectId);
     } catch (error) {
-      console.error("Error deleting task:", error);
-      showToast("Unable to delete task.", "error");
+      console.error(
+        "ProjectOrganizer: failed to delete task",
+        error
+      );
+
+      showToast("Failed to delete task", "error");
     }
   };
 
+
+  /* =======================================================
+     TOGGLE COMPLETION
+  ======================================================= */
+
   const toggleComplete = async (task) => {
+    const nextStatus =
+      task.status === "completed"
+        ? "todo"
+        : "completed";
+
     try {
       await api.put(`/tasks/${task._id}`, {
-        isCompleted: !task.isCompleted,
+        status: nextStatus,
+        isCompleted:
+          nextStatus === "completed",
       });
 
       await fetchTasks(projectId);
-      showToast(
-        task.isCompleted
-          ? "Task marked active."
-          : "Task marked complete."
-      );
     } catch (error) {
-      console.error("Error toggling completion:", error);
-      showToast("Unable to update task.", "error");
+      console.error(
+        "ProjectOrganizer: failed to toggle task",
+        error
+      );
+
+      showToast("Failed to update task", "error");
     }
   };
 
+
+  /* =======================================================
+     DRAG + DROP
+  ======================================================= */
+
   const onDragEnd = async (result) => {
-    const { source, destination } = result;
+    const {
+      source,
+      destination,
+    } = result;
 
     if (!destination) return;
 
@@ -350,652 +522,972 @@ const ProjectOrganizer = () => {
       return;
     }
 
-    const previousColumns = columns;
+    const sourceColumn = Array.from(
+      columns[source.droppableId]
+    );
 
-    const nextColumns = {
-      todo: [...columns.todo],
-      "in-progress": [...columns["in-progress"]],
-      done: [...columns.done],
-    };
+    const destinationColumn =
+      source.droppableId === destination.droppableId
+        ? sourceColumn
+        : Array.from(
+            columns[destination.droppableId]
+          );
 
-    const sourceItems = nextColumns[source.droppableId];
-    const destinationItems = nextColumns[destination.droppableId];
+    const [movedTask] = sourceColumn.splice(
+      source.index,
+      1
+    );
 
-    const [movedTask] = sourceItems.splice(source.index, 1);
-
-    if (!movedTask) return;
+    const nextStatus =
+      destination.droppableId;
 
     const updatedTask = {
       ...movedTask,
-      status: destination.droppableId,
-      isCompleted: destination.droppableId === "done",
+      status: nextStatus,
+      isCompleted:
+        nextStatus === "completed",
     };
 
-    destinationItems.splice(destination.index, 0, updatedTask);
+    destinationColumn.splice(
+      destination.index,
+      0,
+      updatedTask
+    );
 
-    setColumns(nextColumns);
+    /*
+     * Optimistic UI.
+     */
+    setColumns((previous) => ({
+      ...previous,
+
+      [source.droppableId]:
+        source.droppableId === destination.droppableId
+          ? destinationColumn
+          : sourceColumn,
+
+      [destination.droppableId]:
+        destinationColumn,
+    }));
 
     try {
-      await api.put(`/tasks/${movedTask._id}`, {
-        status: destination.droppableId,
-        isCompleted: destination.droppableId === "done",
-      });
+      await api.put(
+        `/tasks/${movedTask._id}`,
+        {
+          status: nextStatus,
+          isCompleted:
+            nextStatus === "completed",
+        }
+      );
     } catch (error) {
-      console.error("Error updating task status:", error);
-      setColumns(previousColumns);
-      showToast("Task could not be moved.", "error");
+      console.error(
+        "ProjectOrganizer: drag update failed",
+        error
+      );
+
+      showToast(
+        "Couldn't move task. Restoring previous state.",
+        "error"
+      );
+
+      await fetchTasks(projectId);
     }
   };
 
-  const pageClass =
-    theme === "dark"
-      ? "text-orbit-text"
-      : "text-slate-900";
 
-  if (loadingProjects) {
-    return (
-      <div className={`flex min-h-[70vh] items-center justify-center ${pageClass}`}>
-        <Loader2 className="animate-spin text-orbit-cyan" size={28} />
-      </div>
-    );
-  }
+  /* =======================================================
+     PROJECT NAME
+  ======================================================= */
+
+  const selectedProject = useMemo(
+    () =>
+      projects.find(
+        (project) =>
+          project._id === projectId
+      ),
+    [projects, projectId]
+  );
+
+
+  /* =======================================================
+     TOTAL TASKS
+  ======================================================= */
+
+  const totalTasks = useMemo(
+    () =>
+      Object.values(columns).reduce(
+        (total, tasks) =>
+          total + tasks.length,
+        0
+      ),
+    [columns]
+  );
+
+
+  /* =======================================================
+     RENDER
+  ======================================================= */
 
   return (
-    <div className={`space-y-6 ${pageClass}`}>
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <button
-            type="button"
-            onClick={() => navigate("/projects")}
-            className="mb-3 flex items-center gap-2 text-xs font-semibold text-orbit-muted transition hover:text-orbit-cyan"
-          >
-            <ArrowLeft size={14} />
-            Projects
-          </button>
+    <div
+      className={`min-h-screen p-4 md:p-6 transition-colors duration-300 ${
+        isDark
+          ? "bg-[#09090f] text-white"
+          : "bg-slate-50 text-slate-900"
+      }`}
+    >
 
-          <div className="flex flex-wrap items-center gap-3">
-            <div>
-              <p className="mb-1 text-xs font-semibold uppercase tracking-[0.18em] text-orbit-cyan">
-                Workspace
-              </p>
+      {/* =================================================
+          HEADER
+      ================================================= */}
 
-              <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
+      <div className="mb-6">
+
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+
+          <div>
+            <div className="flex items-center gap-3">
+
+              <h1 className="text-2xl md:text-3xl font-bold">
                 Project Organizer
               </h1>
-            </div>
 
-            {selectedProject && (
-              <span className="rounded-full border border-orbit-violet/20 bg-orbit-violet/10 px-3 py-1 text-xs font-semibold text-orbit-violet">
-                {selectedProject.name}
-              </span>
-            )}
-          </div>
-
-          <p className="mt-2 max-w-2xl text-sm text-orbit-muted">
-            Move work through the pipeline, identify risk and keep the
-            project moving.
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <select
-            value={projectId}
-            onChange={(event) => {
-              const nextId = event.target.value;
-              setProjectId(nextId);
-
-              if (nextId) {
-                navigate(`/project-organizer/${nextId}`);
-              } else {
-                navigate("/project-organizer");
-              }
-            }}
-            className="
-              min-w-[220px] rounded-xl border border-orbit-border-soft
-              bg-orbit-surface px-4 py-3 text-sm font-semibold
-              text-orbit-text outline-none transition
-              focus:border-orbit-cyan/40
-            "
-          >
-            {!projects.length && (
-              <option value="">No projects</option>
-            )}
-
-            {projects.map((project) => (
-              <option
-                key={project._id}
-                value={project._id}
-                className="bg-orbit-surface"
-              >
-                {project.name}
-              </option>
-            ))}
-          </select>
-
-          <button
-            type="button"
-            onClick={openCreateModal}
-            disabled={!projectId}
-            className="
-              flex items-center justify-center gap-2 rounded-xl
-              bg-gradient-to-r from-orbit-cyan to-orbit-violet
-              px-5 py-3 text-sm font-bold text-orbit-bg
-              shadow-lg shadow-orbit-cyan/10 transition
-              hover:scale-[1.01] disabled:cursor-not-allowed
-              disabled:opacity-40
-            "
-          >
-            <Plus size={17} />
-            New Task
-          </button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {[
-          {
-            label: "Total Tasks",
-            value: stats.total,
-            icon: Target,
-            color: "text-orbit-cyan",
-          },
-          {
-            label: "In Progress",
-            value: stats.active,
-            icon: Clock3,
-            color: "text-orbit-violet",
-          },
-          {
-            label: "Completed",
-            value: stats.completed,
-            icon: CheckCircle2,
-            color: "text-orbit-success",
-          },
-          {
-            label: "Estimated Hours",
-            value: `${stats.hours}h`,
-            icon: CalendarDays,
-            color: "text-orbit-warning",
-          },
-        ].map((stat) => {
-          const Icon = stat.icon;
-
-          return (
-            <div
-              key={stat.label}
-              className="
-                rounded-2xl border border-orbit-border-soft
-                bg-orbit-surface p-4
-              "
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-orbit-muted">
-                  {stat.label}
+              {totalTasks > 0 && (
+                <span
+                  className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
+                    isDark
+                      ? "bg-white/10 text-white/70"
+                      : "bg-slate-200 text-slate-600"
+                  }`}
+                >
+                  {totalTasks}{" "}
+                  {totalTasks === 1
+                    ? "task"
+                    : "tasks"}
                 </span>
+              )}
 
-                <Icon size={16} className={stat.color} />
-              </div>
-
-              <p className="mt-3 text-2xl font-bold">
-                {stat.value}
-              </p>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="rounded-2xl border border-orbit-border-soft bg-orbit-surface p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-orbit-elevated text-orbit-muted">
-              <Search size={17} />
             </div>
 
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search tasks, descriptions or assignees..."
-              className="
-                min-w-0 flex-1 bg-transparent text-sm text-orbit-text
-                outline-none placeholder:text-orbit-muted
-              "
-            />
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Filter size={15} className="text-orbit-muted" />
-
-            {["all", "todo", "in-progress", "done"].map((filter) => (
-              <button
-                key={filter}
-                type="button"
-                onClick={() => setStatusFilter(filter)}
-                className={`
-                  rounded-lg px-3 py-2 text-xs font-semibold transition
-                  ${
-                    statusFilter === filter
-                      ? "bg-orbit-cyan/10 text-orbit-cyan"
-                      : "text-orbit-muted hover:bg-orbit-elevated hover:text-orbit-text"
-                  }
-                `}
-              >
-                {filter === "all"
-                  ? "All"
-                  : STATUS_META[filter]?.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {loadingTasks ? (
-        <div className="flex min-h-[320px] items-center justify-center rounded-2xl border border-orbit-border-soft bg-orbit-surface">
-          <div className="flex flex-col items-center gap-3">
-            <Loader2
-              size={26}
-              className="animate-spin text-orbit-cyan"
-            />
-            <p className="text-sm text-orbit-muted">
-              Loading project tasks...
+            <p
+              className={`mt-1 text-sm ${
+                isDark
+                  ? "text-white/50"
+                  : "text-slate-500"
+              }`}
+            >
+              {selectedProject?.name ||
+                "Organize your project work"}
             </p>
           </div>
+
+
+          <div className="flex flex-wrap items-center gap-3">
+
+            {/* Project selector */}
+
+            <select
+              value={projectId}
+              onChange={(event) =>
+                setProjectId(event.target.value)
+              }
+              disabled={loadingProjects}
+              className={`min-w-[190px] px-4 py-2.5 rounded-xl border outline-none ${
+                isDark
+                  ? "bg-white/5 border-white/10 text-white"
+                  : "bg-white border-slate-200 text-slate-800"
+              }`}
+            >
+
+              {projects.length === 0 && (
+                <option value="">
+                  No projects
+                </option>
+              )}
+
+              {projects.map((project) => (
+                <option
+                  key={project._id}
+                  value={project._id}
+                >
+                  {project.name}
+                </option>
+              ))}
+
+            </select>
+
+
+            {/* Refresh */}
+
+            <button
+              type="button"
+              onClick={() =>
+                fetchTasks(projectId)
+              }
+              disabled={
+                loadingTasks || !projectId
+              }
+              className={`p-2.5 rounded-xl border ${
+                isDark
+                  ? "border-white/10 bg-white/5"
+                  : "border-slate-200 bg-white"
+              }`}
+              title="Refresh tasks"
+            >
+              <RefreshCw
+                size={18}
+                className={
+                  loadingTasks
+                    ? "animate-spin"
+                    : ""
+                }
+              />
+            </button>
+
+
+            {/* New task */}
+
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={openCreateModal}
+              disabled={!projectId}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-orbit-bg bg-cyan-300 shadow-lg shadow-indigo-500/20 disabled:opacity-40"
+            >
+              <Plus size={18} />
+              New Task
+            </motion.button>
+
+          </div>
+
         </div>
-      ) : !projectId ? (
-        <div className="rounded-2xl border border-dashed border-orbit-border-soft bg-orbit-surface p-12 text-center">
-          <Target className="mx-auto mb-4 text-orbit-muted" size={32} />
-          <h2 className="font-semibold">No project selected</h2>
-          <p className="mt-1 text-sm text-orbit-muted">
-            Create or select a project to start organizing work.
-          </p>
+
+      </div>
+
+
+      {/* =================================================
+          LOADING
+      ================================================= */}
+
+      {loadingTasks ? (
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+
+          {["todo", "in-progress", "completed"].map(
+            (column) => (
+              <div
+                key={column}
+                className={`rounded-2xl p-4 min-h-[300px] ${
+                  isDark
+                    ? "bg-white/[0.035]"
+                    : "bg-white border border-slate-200"
+                }`}
+              >
+
+                <div className="h-5 w-28 rounded bg-current opacity-10 mb-5" />
+
+                <div className="space-y-3">
+
+                  {[1, 2, 3].map((item) => (
+                    <div
+                      key={item}
+                      className="h-24 rounded-xl bg-current opacity-5 animate-pulse"
+                    />
+                  ))}
+
+                </div>
+
+              </div>
+            )
+          )}
+
         </div>
+
       ) : (
-        <DragDropContext onDragEnd={onDragEnd}>
-          <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
-            {Object.entries(columns).map(([key, tasks]) => {
-              const meta = STATUS_META[key];
-              const Icon = meta.icon;
-              const visibleTasks = filteredTasks(tasks);
 
-              return (
-                <Droppable droppableId={key} key={key}>
-                  {(provided, snapshot) => (
-                    <section
-                      ref={provided.innerRef}
-                      {...provided.droppableProps}
-                      className={`
-                        min-h-[420px] rounded-2xl border
-                        ${meta.border}
-                        ${
-                          snapshot.isDraggingOver
-                            ? "bg-orbit-elevated/80"
-                            : "bg-orbit-surface"
+        /* =================================================
+           THREE COLUMN KANBAN
+        ================================================= */
+
+        <DragDropContext
+          onDragEnd={onDragEnd}
+        >
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5 items-start">
+
+            {Object.entries(
+              STATUS_CONFIG
+            ).map(
+              ([
+                status,
+                config,
+              ]) => {
+
+                const tasks =
+                  columns[status] || [];
+
+                return (
+                  <Droppable
+                    droppableId={status}
+                    key={status}
+                  >
+
+                    {(provided, snapshot) => (
+
+                      <section
+                        ref={
+                          provided.innerRef
                         }
-                        p-4 transition
-                      `}
-                    >
-                      <div className="mb-4 flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div
-                            className={`flex h-9 w-9 items-center justify-center rounded-xl ${meta.bg} ${meta.color}`}
-                          >
-                            <Icon size={17} />
-                          </div>
+                        {...provided.droppableProps}
+                        className={`rounded-2xl p-4 min-h-[320px] transition-all ${
+                          snapshot.isDraggingOver
+                            ? isDark
+                              ? "bg-indigo-500/10 ring-1 ring-indigo-400/30"
+                              : "bg-indigo-50 ring-1 ring-indigo-200"
+                            : isDark
+                            ? "bg-white/[0.035] border border-white/[0.06]"
+                            : "bg-white border border-slate-200"
+                        }`}
+                      >
 
-                          <div>
-                            <h2 className="text-sm font-bold">
-                              {meta.label}
+                        {/* Column heading */}
+
+                        <div className="flex items-center justify-between mb-4">
+
+                          <div className="flex items-center gap-2">
+
+                            <span
+                              className={`w-2.5 h-2.5 rounded-full ${config.dot}`}
+                            />
+
+                            <h2 className="font-semibold">
+                              {config.label}
                             </h2>
 
-                            <p className="text-xs text-orbit-muted">
-                              {visibleTasks.length} visible
-                            </p>
                           </div>
+
+                          <span
+                            className={`text-xs font-semibold px-2 py-1 rounded-full ${
+                              isDark
+                                ? "bg-white/5 text-white/50"
+                                : "bg-slate-100 text-slate-500"
+                            }`}
+                          >
+                            {tasks.length}
+                          </span>
+
                         </div>
 
-                        <span className="rounded-lg bg-orbit-elevated px-2.5 py-1 text-xs font-bold text-orbit-muted">
-                          {tasks.length}
-                        </span>
-                      </div>
 
-                      <div className="space-y-3">
-                        {visibleTasks.map((task, index) => (
-                          <Draggable
-                            key={task._id}
-                            draggableId={String(task._id)}
-                            index={index}
-                          >
-                            {(dragProvided, dragSnapshot) => (
-                              <motion.article
-                                ref={dragProvided.innerRef}
-                                {...dragProvided.draggableProps}
-                                {...dragProvided.dragHandleProps}
-                                layout
-                                whileHover={{
-                                  y: dragSnapshot.isDragging ? 0 : -2,
-                                }}
-                                className={`
-                                  rounded-xl border
-                                  border-orbit-border-soft
-                                  bg-orbit-elevated/70 p-4
-                                  ${
-                                    dragSnapshot.isDragging
-                                      ? "shadow-2xl shadow-orbit-cyan/10"
-                                      : ""
-                                  }
-                                `}
+                        {/* Tasks */}
+
+                        <div className="space-y-3">
+
+                          {tasks.map(
+                            (
+                              task,
+                              index
+                            ) => (
+
+                              <Draggable
+                                key={String(
+                                  task._id
+                                )}
+                                draggableId={String(
+                                  task._id
+                                )}
+                                index={index}
                               >
-                                <div className="flex items-start justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <h3
-                                      className={`
-                                        text-sm font-bold
-                                        ${
-                                          task.isCompleted
-                                            ? "text-orbit-muted line-through"
-                                            : "text-orbit-text"
-                                        }
-                                      `}
-                                    >
-                                      {task.title}
-                                    </h3>
 
-                                    {task.description && (
-                                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-orbit-muted">
-                                        {task.description}
-                                      </p>
-                                    )}
-                                  </div>
+                                {(
+                                  draggableProvided,
+                                  draggableSnapshot
+                                ) => (
 
-                                  <button
-                                    type="button"
-                                    className="shrink-0 text-orbit-muted hover:text-orbit-text"
-                                  >
-                                    <MoreHorizontal size={17} />
-                                  </button>
-                                </div>
-
-                                <div className="mt-4 flex flex-wrap items-center gap-2">
-                                  <RiskBadge
-                                    riskScore={task.riskScore || 0}
-                                  />
-
-                                  {task.assignedTo && (
-                                    <span className="flex items-center gap-1 rounded-full bg-orbit-bg px-2 py-1 text-[10px] font-semibold text-orbit-muted">
-                                      <Users size={11} />
-                                      {task.assignedTo}
-                                    </span>
-                                  )}
-
-                                  {task.estimatedHours && (
-                                    <span className="flex items-center gap-1 rounded-full bg-orbit-bg px-2 py-1 text-[10px] font-semibold text-orbit-muted">
-                                      <Clock3 size={11} />
-                                      {task.estimatedHours}h
-                                    </span>
-                                  )}
-                                </div>
-
-                                <div className="mt-4 flex items-center justify-between border-t border-orbit-border-soft pt-3">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setSelectedTask(task._id);
-                                      setShowTimeline(true);
+                                  <motion.div
+                                    ref={
+                                      draggableProvided.innerRef
+                                    }
+                                    {...draggableProvided.draggableProps}
+                                    {...draggableProvided.dragHandleProps}
+                                    initial={{
+                                      opacity: 0,
+                                      y: 8,
                                     }}
-                                    className="text-[11px] font-semibold text-orbit-cyan transition hover:text-orbit-cyan-soft"
+                                    animate={{
+                                      opacity: 1,
+                                      y: 0,
+                                    }}
+                                    className={`rounded-xl p-4 border transition-shadow ${
+                                      draggableSnapshot.isDragging
+                                        ? "shadow-2xl ring-2 ring-indigo-400/40"
+                                        : ""
+                                    } ${
+                                      isDark
+                                        ? "bg-[#12121a] border-white/[0.07]"
+                                        : "bg-white border-slate-200 shadow-sm"
+                                    }`}
                                   >
-                                    View timeline
-                                  </button>
 
-                                  <div className="flex items-center gap-1">
-                                    <button
-                                      type="button"
-                                      title="Complete task"
-                                      onClick={() =>
-                                        toggleComplete(task)
-                                      }
-                                      className="rounded-lg p-2 text-orbit-muted transition hover:bg-orbit-success/10 hover:text-orbit-success"
+                                    {/* Task top */}
+
+                                    <div className="flex items-start justify-between gap-3">
+
+                                      <div className="min-w-0">
+
+                                        <h3
+                                          className={`font-semibold break-words ${
+                                            task.isCompleted
+                                              ? "line-through opacity-60"
+                                              : ""
+                                          }`}
+                                        >
+                                          {task.title ||
+                                            "Untitled task"}
+                                        </h3>
+
+                                        {task.description && (
+                                          <p
+                                            className={`mt-1 text-sm line-clamp-2 ${
+                                              isDark
+                                                ? "text-white/50"
+                                                : "text-slate-500"
+                                            }`}
+                                          >
+                                            {
+                                              task.description
+                                            }
+                                          </p>
+                                        )}
+
+                                      </div>
+
+                                      <RiskBadge
+                                        riskScore={
+                                          task.riskScore ||
+                                          0
+                                        }
+                                      />
+
+                                    </div>
+
+
+                                    {/* Meta */}
+
+                                    <div
+                                      className={`flex flex-wrap items-center gap-3 mt-4 text-xs ${
+                                        isDark
+                                          ? "text-white/40"
+                                          : "text-slate-500"
+                                      }`}
                                     >
-                                      {task.isCompleted ? (
-                                        <CheckCircle2 size={15} />
-                                      ) : (
-                                        <Check size={15} />
-                                      )}
-                                    </button>
 
-                                    <button
-                                      type="button"
-                                      title="Edit task"
-                                      onClick={() =>
-                                        openEditModal(task)
-                                      }
-                                      className="rounded-lg p-2 text-orbit-muted transition hover:bg-orbit-cyan/10 hover:text-orbit-cyan"
+                                      <span className="flex items-center gap-1">
+
+                                        <Clock3
+                                          size={13}
+                                        />
+
+                                        {task.estimatedHours ||
+                                          0}
+                                        h
+
+                                      </span>
+
+                                      <span>
+                                        {task.assignedTo ||
+                                          "Unassigned"}
+                                      </span>
+
+                                    </div>
+
+
+                                    {/* Actions */}
+
+                                    <div
+                                      className={`flex items-center justify-between mt-4 pt-3 border-t ${
+                                        isDark
+                                          ? "border-white/[0.06]"
+                                          : "border-slate-100"
+                                      }`}
                                     >
-                                      <Edit3 size={15} />
-                                    </button>
 
-                                    <button
-                                      type="button"
-                                      title="Delete task"
-                                      onClick={() => deleteTask(task)}
-                                      className="rounded-lg p-2 text-orbit-muted transition hover:bg-orbit-danger/10 hover:text-orbit-danger"
-                                    >
-                                      <Trash2 size={15} />
-                                    </button>
-                                  </div>
-                                </div>
-                              </motion.article>
-                            )}
-                          </Draggable>
-                        ))}
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSelectedTask(
+                                            task._id
+                                          );
+                                          setShowTimeline(
+                                            true
+                                          );
+                                        }}
+                                        className="text-xs font-medium text-indigo-400 hover:text-indigo-300"
+                                      >
+                                        View timeline
+                                      </button>
 
-                        {provided.placeholder}
 
-                        {!visibleTasks.length && (
-                          <div className="flex min-h-[220px] items-center justify-center rounded-xl border border-dashed border-orbit-border-soft">
-                            <div className="text-center">
-                              <CircleDot
-                                size={22}
-                                className="mx-auto mb-2 text-orbit-muted"
-                              />
-                              <p className="text-xs font-semibold text-orbit-muted">
-                                {search
-                                  ? "No matching tasks"
-                                  : "No tasks here yet"}
-                              </p>
-                            </div>
+                                      <div className="flex items-center gap-2">
+
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            toggleComplete(
+                                              task
+                                            )
+                                          }
+                                          className={`p-1.5 rounded-lg ${
+                                            task.isCompleted
+                                              ? "text-emerald-400 bg-emerald-400/10"
+                                              : "text-white/40 hover:text-emerald-400"
+                                          }`}
+                                          title={
+                                            task.isCompleted
+                                              ? "Move to To Do"
+                                              : "Complete task"
+                                          }
+                                        >
+                                          {task.isCompleted ? (
+                                            <Check
+                                              size={16}
+                                            />
+                                          ) : (
+                                            <CheckCircle2
+                                              size={17}
+                                            />
+                                          )}
+                                        </button>
+
+
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            openEditModal(
+                                              task
+                                            )
+                                          }
+                                          className="p-1.5 rounded-lg text-blue-400 hover:bg-blue-400/10"
+                                          title="Edit task"
+                                        >
+                                          <Edit2
+                                            size={16}
+                                          />
+                                        </button>
+
+
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            deleteTask(
+                                              task
+                                            )
+                                          }
+                                          className="p-1.5 rounded-lg text-red-400 hover:bg-red-400/10"
+                                          title="Delete task"
+                                        >
+                                          <Trash2
+                                            size={16}
+                                          />
+                                        </button>
+
+                                      </div>
+
+                                    </div>
+
+                                  </motion.div>
+
+                                )}
+
+                              </Draggable>
+
+                            )
+                          )}
+
+                          {provided.placeholder}
+
+                        </div>
+
+
+                        {/* Empty column */}
+
+                        {tasks.length === 0 && (
+                          <div
+                            className={`flex flex-col items-center justify-center min-h-[200px] text-center ${
+                              isDark
+                                ? "text-white/30"
+                                : "text-slate-400"
+                            }`}
+                          >
+
+                            <CircleDot
+                              size={28}
+                              className="mb-2 opacity-40"
+                            />
+
+                            <p className="text-sm">
+                              No tasks here
+                            </p>
+
+                            <p className="text-xs mt-1 opacity-70">
+                              Drag a task here
+                            </p>
+
                           </div>
                         )}
-                      </div>
-                    </section>
-                  )}
-                </Droppable>
-              );
-            })}
+
+                      </section>
+
+                    )}
+
+                  </Droppable>
+                );
+              }
+            )}
+
           </div>
 
-          <div className="mt-5 rounded-2xl border border-orbit-border-soft bg-orbit-surface p-4">
-            <WorkloadRadar />
-          </div>
         </DragDropContext>
+
       )}
+
+
+      {/* =================================================
+          WORKLOAD
+      ================================================= */}
+
+      <div className="mt-6">
+        <WorkloadRadar />
+      </div>
+
+
+      {/* =================================================
+          TIMELINE
+      ================================================= */}
 
       <TimelineModal
         isOpen={showTimeline}
-        onClose={() => setShowTimeline(false)}
+        onClose={() =>
+          setShowTimeline(false)
+        }
         taskId={selectedTask}
       />
 
+
+      {/* =================================================
+          TASK MODAL
+      ================================================= */}
+
       <AnimatePresence>
+
         {showModal && (
+
           <motion.div
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 backdrop-blur-md"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+            onMouseDown={(event) => {
+              if (
+                event.target ===
+                event.currentTarget
+              ) {
+                setShowModal(false);
+              }
+            }}
           >
+
             <motion.div
-              initial={{ opacity: 0, scale: 0.96, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.96, y: 10 }}
-              className="w-full max-w-xl overflow-hidden rounded-2xl border border-orbit-border-soft bg-orbit-surface shadow-2xl"
+              initial={{
+                opacity: 0,
+                scale: 0.96,
+                y: 10,
+              }}
+              animate={{
+                opacity: 1,
+                scale: 1,
+                y: 0,
+              }}
+              exit={{
+                opacity: 0,
+                scale: 0.96,
+                y: 10,
+              }}
+              className={`w-full max-w-lg rounded-2xl border p-6 shadow-2xl ${
+                isDark
+                  ? "bg-[#111119] border-white/10"
+                  : "bg-white border-slate-200"
+              }`}
             >
-              <div className="flex items-center justify-between border-b border-orbit-border-soft px-5 py-4">
+
+              <div className="flex items-center justify-between mb-5">
+
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-orbit-cyan">
-                    Task
-                  </p>
-                  <h2 className="mt-1 text-lg font-bold">
-                    {editing ? "Edit task" : "Create task"}
+                  <h2 className="text-xl font-bold">
+                    {editing
+                      ? "Edit Task"
+                      : "Create Task"}
                   </h2>
+
+                  <p
+                    className={`text-sm mt-1 ${
+                      isDark
+                        ? "text-white/40"
+                        : "text-slate-500"
+                    }`}
+                  >
+                    Add the information needed
+                    to track this task.
+                  </p>
                 </div>
 
                 <button
                   type="button"
-                  onClick={closeModal}
-                  className="rounded-xl p-2 text-orbit-muted transition hover:bg-orbit-elevated hover:text-orbit-text"
+                  onClick={() =>
+                    setShowModal(false)
+                  }
+                  className="p-2 rounded-lg opacity-60 hover:opacity-100"
                 >
                   <X size={18} />
                 </button>
+
               </div>
+
 
               <form
                 onSubmit={handleSubmit}
-                className="space-y-4 p-5"
+                className="space-y-4"
               >
+
+                {/* Project */}
+
                 <div>
-                  <label className="mb-1.5 block text-xs font-semibold text-orbit-muted">
+
+                  <label className="text-xs font-medium opacity-70">
                     Project
                   </label>
 
                   <select
-                    value={formData.project || projectId}
-                    onChange={(event) =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        project: event.target.value,
-                      }))
+                    value={
+                      formData.project ||
+                      projectId
                     }
-                    className="
-                      w-full rounded-xl border border-orbit-border-soft
-                      bg-orbit-elevated px-3 py-3 text-sm
-                      text-orbit-text outline-none
-                      focus:border-orbit-cyan/40
-                    "
+                    onChange={(event) =>
+                      setFormData({
+                        ...formData,
+                        project:
+                          event.target.value,
+                      })
+                    }
+                    className={`mt-1 w-full px-3 py-2.5 rounded-xl border outline-none ${
+                      isDark
+                        ? "bg-white/5 border-white/10 text-white"
+                        : "bg-slate-50 border-slate-200"
+                    }`}
                   >
-                    {projects.map((project) => (
-                      <option
-                        key={project._id}
-                        value={project._id}
-                        className="bg-orbit-surface"
-                      >
-                        {project.name}
-                      </option>
-                    ))}
+
+                    {projects.map(
+                      (project) => (
+                        <option
+                          key={
+                            project._id
+                          }
+                          value={
+                            project._id
+                          }
+                        >
+                          {project.name}
+                        </option>
+                      )
+                    )}
+
                   </select>
+
                 </div>
 
+
+                {/* Title */}
+
                 <div>
-                  <label className="mb-1.5 block text-xs font-semibold text-orbit-muted">
+
+                  <label className="text-xs font-medium opacity-70">
                     Task title
                   </label>
 
                   <input
-                    required
+                    type="text"
                     value={formData.title}
                     onChange={(event) =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        title: event.target.value,
-                      }))
+                      setFormData({
+                        ...formData,
+                        title:
+                          event.target.value,
+                      })
                     }
-                    placeholder="What needs to be done?"
-                    className="
-                      w-full rounded-xl border border-orbit-border-soft
-                      bg-orbit-elevated px-3 py-3 text-sm
-                      text-orbit-text outline-none
-                      placeholder:text-orbit-muted
-                      focus:border-orbit-cyan/40
-                    "
+                    placeholder="e.g. Build dashboard"
+                    required
+                    className={`mt-1 w-full px-3 py-2.5 rounded-xl border outline-none ${
+                      isDark
+                        ? "bg-white/5 border-white/10"
+                        : "bg-slate-50 border-slate-200"
+                    }`}
                   />
+
                 </div>
 
+
+                {/* Description */}
+
                 <div>
-                  <label className="mb-1.5 block text-xs font-semibold text-orbit-muted">
+
+                  <label className="text-xs font-medium opacity-70">
                     Description
                   </label>
 
                   <textarea
-                    value={formData.description}
-                    onChange={(event) =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        description: event.target.value,
-                      }))
+                    value={
+                      formData.description
                     }
-                    placeholder="Add useful context..."
-                    rows={4}
-                    className="
-                      w-full resize-none rounded-xl
-                      border border-orbit-border-soft
-                      bg-orbit-elevated px-3 py-3 text-sm
-                      text-orbit-text outline-none
-                      placeholder:text-orbit-muted
-                      focus:border-orbit-cyan/40
-                    "
+                    onChange={(event) =>
+                      setFormData({
+                        ...formData,
+                        description:
+                          event.target.value,
+                      })
+                    }
+                    rows={3}
+                    placeholder="Describe the task..."
+                    className={`mt-1 w-full px-3 py-2.5 rounded-xl border outline-none resize-none ${
+                      isDark
+                        ? "bg-white/5 border-white/10"
+                        : "bg-slate-50 border-slate-200"
+                    }`}
                   />
+
                 </div>
 
-                <div className="grid gap-4 sm:grid-cols-3">
+
+                <div className="grid grid-cols-2 gap-3">
+
+                  {/* Assigned */}
+
                   <div>
-                    <label className="mb-1.5 block text-xs font-semibold text-orbit-muted">
+
+                    <label className="text-xs font-medium opacity-70">
                       Assigned to
                     </label>
 
                     <input
-                      value={formData.assignedTo}
-                      onChange={(event) =>
-                        setFormData((prev) => ({
-                          ...prev,
-                          assignedTo: event.target.value,
-                        }))
+                      type="text"
+                      value={
+                        formData.assignedTo
                       }
-                      placeholder="Name"
-                      className="
-                        w-full rounded-xl border border-orbit-border-soft
-                        bg-orbit-elevated px-3 py-3 text-sm
-                        text-orbit-text outline-none
-                        placeholder:text-orbit-muted
-                      "
+                      onChange={(event) =>
+                        setFormData({
+                          ...formData,
+                          assignedTo:
+                            event.target
+                              .value,
+                        })
+                      }
+                      placeholder="Team member"
+                      className={`mt-1 w-full px-3 py-2.5 rounded-xl border outline-none ${
+                        isDark
+                          ? "bg-white/5 border-white/10"
+                          : "bg-slate-50 border-slate-200"
+                      }`}
                     />
+
                   </div>
 
+
+                  {/* Hours */}
+
                   <div>
-                    <label className="mb-1.5 block text-xs font-semibold text-orbit-muted">
-                      Hours
+
+                    <label className="text-xs font-medium opacity-70">
+                      Estimated hours
                     </label>
 
                     <input
                       type="number"
                       min="1"
-                      step="0.5"
-                      value={formData.estimatedHours}
-                      onChange={(event) =>
-                        setFormData((prev) => ({
-                          ...prev,
-                          estimatedHours: event.target.value,
-                        }))
+                      value={
+                        formData.estimatedHours
                       }
-                      className="
-                        w-full rounded-xl border border-orbit-border-soft
-                        bg-orbit-elevated px-3 py-3 text-sm
-                        text-orbit-text outline-none
-                      "
+                      onChange={(event) =>
+                        setFormData({
+                          ...formData,
+                          estimatedHours:
+                            Number(
+                              event.target
+                                .value
+                            ),
+                        })
+                      }
+                      className={`mt-1 w-full px-3 py-2.5 rounded-xl border outline-none ${
+                        isDark
+                          ? "bg-white/5 border-white/10"
+                          : "bg-slate-50 border-slate-200"
+                      }`}
                     />
+
                   </div>
 
+                </div>
+
+
+                <div className="grid grid-cols-2 gap-3">
+
+                  {/* Status */}
+
                   <div>
-                    <label className="mb-1.5 block text-xs font-semibold text-orbit-muted">
-                      Risk 0–1
+
+                    <label className="text-xs font-medium opacity-70">
+                      Status
+                    </label>
+
+                    <select
+                      value={
+                        formData.status
+                      }
+                      onChange={(event) =>
+                        setFormData({
+                          ...formData,
+                          status:
+                            event.target
+                              .value,
+                        })
+                      }
+                      className={`mt-1 w-full px-3 py-2.5 rounded-xl border outline-none ${
+                        isDark
+                          ? "bg-white/5 border-white/10 text-white"
+                          : "bg-slate-50 border-slate-200"
+                      }`}
+                    >
+
+                      <option value="todo">
+                        To Do
+                      </option>
+
+                      <option value="in-progress">
+                        In Progress
+                      </option>
+
+                      <option value="completed">
+                        Completed
+                      </option>
+
+                    </select>
+
+                  </div>
+
+
+                  {/* Risk */}
+
+                  <div>
+
+                    <label className="text-xs font-medium opacity-70">
+                      Risk score
                     </label>
 
                     <input
@@ -1003,83 +1495,115 @@ const ProjectOrganizer = () => {
                       min="0"
                       max="1"
                       step="0.01"
-                      value={formData.riskScore}
-                      onChange={(event) =>
-                        setFormData((prev) => ({
-                          ...prev,
-                          riskScore: event.target.value,
-                        }))
+                      value={
+                        formData.riskScore
                       }
-                      className="
-                        w-full rounded-xl border border-orbit-border-soft
-                        bg-orbit-elevated px-3 py-3 text-sm
-                        text-orbit-text outline-none
-                      "
+                      onChange={(event) =>
+                        setFormData({
+                          ...formData,
+                          riskScore:
+                            Number(
+                              event.target
+                                .value
+                            ),
+                        })
+                      }
+                      className={`mt-1 w-full px-3 py-2.5 rounded-xl border outline-none ${
+                        isDark
+                          ? "bg-white/5 border-white/10"
+                          : "bg-slate-50 border-slate-200"
+                      }`}
                     />
+
                   </div>
+
                 </div>
 
-                <div className="flex justify-end gap-2 border-t border-orbit-border-soft pt-4">
+
+                {/* Buttons */}
+
+                <div className="flex justify-end gap-3 pt-3">
+
                   <button
                     type="button"
-                    onClick={closeModal}
-                    className="
-                      rounded-xl border border-orbit-border-soft
-                      px-4 py-2.5 text-sm font-semibold
-                      text-orbit-muted transition
-                      hover:bg-orbit-elevated hover:text-orbit-text
-                    "
+                    onClick={() =>
+                      setShowModal(false)
+                    }
+                    className={`px-4 py-2.5 rounded-xl ${
+                      isDark
+                        ? "bg-white/5 hover:bg-white/10"
+                        : "bg-slate-100 hover:bg-slate-200"
+                    }`}
                   >
                     Cancel
                   </button>
 
                   <button
                     type="submit"
-                    className="
-                      rounded-xl bg-gradient-to-r
-                      from-orbit-cyan to-orbit-violet
-                      px-5 py-2.5 text-sm font-bold text-orbit-bg
-                    "
+                    className="px-5 py-2.5 rounded-xl font-semibold text-white bg-gradient-to-r from-indigo-500 to-purple-600"
                   >
-                    {editing ? "Save Changes" : "Create Task"}
+                    {editing
+                      ? "Update Task"
+                      : "Create Task"}
                   </button>
+
                 </div>
+
               </form>
+
             </motion.div>
+
           </motion.div>
+
         )}
+
       </AnimatePresence>
+
+
+      {/* =================================================
+          TOAST
+      ================================================= */}
 
       <AnimatePresence>
+
         {toast && (
+
           <motion.div
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 15 }}
-            className={`
-              fixed bottom-5 right-5 z-[120]
-              flex max-w-sm items-center gap-3
-              rounded-xl border px-4 py-3
-              shadow-2xl backdrop-blur-xl
-              ${
-                toast.type === "error"
-                  ? "border-orbit-danger/20 bg-orbit-danger/10 text-orbit-danger"
-                  : "border-orbit-success/20 bg-orbit-success/10 text-orbit-success"
-              }
-            `}
+            initial={{
+              opacity: 0,
+              y: 20,
+            }}
+            animate={{
+              opacity: 1,
+              y: 0,
+            }}
+            exit={{
+              opacity: 0,
+              y: 20,
+            }}
+            className={`fixed bottom-5 right-5 z-[60] px-4 py-3 rounded-xl shadow-xl flex items-center gap-2 ${
+              toast.type === "error"
+                ? "bg-red-500 text-white"
+                : "bg-emerald-500 text-white"
+            }`}
           >
+
             {toast.type === "error" ? (
-              <AlertTriangle size={17} />
+              <X size={17} />
             ) : (
-              <CheckCircle2 size={17} />
+              <Check size={17} />
             )}
 
-            <span className="text-sm font-semibold">
+            <span className="text-sm font-medium">
               {toast.message}
             </span>
+
           </motion.div>
+
         )}
+
       </AnimatePresence>
+
     </div>
   );
 };
