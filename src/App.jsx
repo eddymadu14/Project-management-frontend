@@ -50,7 +50,10 @@ function AppRoutes() {
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       
-      <Route path="/landing" element={<LandingPage />} />
+            <Route path="/" element={<LandingPage />} />
+                        <Route path="/landing" element={<LandingPage />} />
+
+
       
       
          <Route path="verify-success" element={< VerifyEmailSuccess />} />
