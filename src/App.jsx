@@ -34,7 +34,6 @@ import Cancel from "./pages/Cancel";
 import AdminUsers from "./pages/admin/Users";
 import AdminTransactions from "./pages/admin/Transactions";
 import AdminLogs from "./pages/admin/Logs";
-import Projects from "./pages/Projects";
 import Team from "./pages/Team";
 
 import Organizer from "./pages/Cancel";
