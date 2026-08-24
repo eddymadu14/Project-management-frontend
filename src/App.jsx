@@ -51,6 +51,7 @@ function AppRoutes() {
       
             <Route path="/" element={<LandingPage />} />
                         <Route path="/landing" element={<LandingPage />} />
+                        
 
 
       
@@ -61,7 +62,7 @@ function AppRoutes() {
 
       {/* Protected dashboard routes with layout */}
       <Route
-        path="/dashboard"
+        path="/"
         element={
           <ProtectedRoute>
             <DashboardLayout />

@@ -1,33 +1,33 @@
 import React, { useState, useEffect } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import Sidebar from "../components/Sidebar";
-import Navbar from "../components/Navbar";
 import Topbar from "../components/Topbar";
 
 export default function DashboardLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
 
-  // ✅ Close sidebar automatically when route changes
   useEffect(() => {
     setSidebarOpen(false);
   }, [location.pathname]);
 
   return (
-    <div className="flex min-h-screen bg-gray-50 dark:bg-gray-900">
-      {/* Sidebar */}
-      <Sidebar
-        isOpen={sidebarOpen}
-        toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-      />
+    <div className="min-h-screen bg-orbit-bg text-orbit-text">
+      <div className="flex min-h-screen">
+        <Sidebar
+          isOpen={sidebarOpen}
+          toggleSidebar={() => setSidebarOpen((prev) => !prev)}
+        />
 
-      {/* Main content area */}
-      <div className="flex flex-col flex-1">
-        <Navbar toggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
-          
-        <main className="flex-grow p-6">
-          <Outlet />
-        </main>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <Topbar
+            toggleSidebar={() => setSidebarOpen((prev) => !prev)}
+          />
+
+          <main className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8">
+            <Outlet />
+          </main>
+        </div>
       </div>
     </div>
   );
