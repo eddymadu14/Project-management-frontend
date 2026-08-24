@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import api from "../utils/api";
 import { useAuth } from "../context/AuthContext";
 import toast, { Toaster } from "react-hot-toast";
-import GlassModal from "../components/ui/GlassModal";
+import GlassModal from "../components/ui/glassModal";
 
 function TeamManagement() {
   const { user, token } = useAuth();
