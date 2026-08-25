@@ -1540,7 +1540,7 @@ const ProjectOrganizer = () => {
 
                   <button
                     type="submit"
-                    className="px-5 py-2.5 rounded-xl font-semibold text-white bg-gradient-to-r from-indigo-500 to-purple-600"
+                    className="px-5 py-2.5 rounded-xl font-semibold text-white bg-cyan-300"
                   >
                     {editing
                       ? "Update Task"
