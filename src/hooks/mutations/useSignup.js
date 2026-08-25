@@ -12,6 +12,8 @@ export const useRegisterUser = () => {
     onSuccess: (data) => {
       toast.success("Registration successful! 🎉");
       //toast.success(data.message)
+            navigate("/login");
+
       
       setTimeout(() => { toast.success(data.message);}, 1000)
     },
