@@ -4,6 +4,8 @@ import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import VerifyEmailSuccess from "./components/verifySuccess";
 import VerifyEmailFailed from "./components/verifyFailed";
+import VerifyEmail from "./components/VerifyEmail";
+
 
 import ProtectedRoute from "./routes/ProtectedRoutes";
 import { useLoginUser, useRegisterUser, useLogout } from "./hooks/mutations";
@@ -52,6 +54,12 @@ function AppRoutes() {
             <Route path="/" element={<LandingPage />} />
                         <Route path="/landing" element={<LandingPage />} />
                         
+
+        
+<Route
+  path="/verify-email"
+  element={<VerifyEmail />}
+/>
 
 
       

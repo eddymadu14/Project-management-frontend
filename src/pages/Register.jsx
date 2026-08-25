@@ -53,6 +53,7 @@ export default function Register() {
         password: form.password,
       });
 
+      navigate("/login");
     } catch (error) {
       console.error(error);
     }
