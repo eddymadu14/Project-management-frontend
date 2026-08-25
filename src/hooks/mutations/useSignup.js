@@ -11,6 +11,7 @@ export const useRegisterUser = () => {
     },
     onSuccess: (data) => {
       toast.success("Registration successful! 🎉");
+
       //toast.success(data.message)
       
       
