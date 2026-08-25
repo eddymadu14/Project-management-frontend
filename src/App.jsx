@@ -62,7 +62,7 @@ function AppRoutes() {
 
       {/* Protected dashboard routes with layout */}
       <Route
-        path="/"
+        path="/app"
         element={
           <ProtectedRoute>
             <DashboardLayout />
